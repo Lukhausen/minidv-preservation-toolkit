@@ -1,0 +1,10 @@
+frames/
+clips/
+compression_clips/
+preview_uploads/
+preview_clips/
+final_samples/
+votes*.json
+video_frame_cache.json
+_server*.log
+*.lwi

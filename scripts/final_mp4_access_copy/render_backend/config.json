@@ -1,0 +1,160 @@
+{
+  "_comment": "QTGMC quality modes plus regular deinterlacer baselines. This shared config is used by the comparison suite and the MP4 render backend. All run TFF=False (PAL DV is BFF), assume 25 fps PAL DV source timing, and target 50p output. Chroma is promoted to YUV444P16 as interlaced before deinterlacing (PAL DV 4:2:0 CUE fix). 'qtgmc' is passed verbatim as kwargs to havsfunc.QTGMC; 'jet_qtgmc' configures vs-jetpack/vsdeinterlace QTempGaussMC stages; 'method' selects built-in/plugin baselines.",
+  "render": {
+    "fps_divisor": 1,
+    "source_fps_num": 25,
+    "source_fps_den": 1,
+    "tff": false,
+    "matrix": "470bg",
+    "transfer": "601",
+    "primaries": "470bg",
+    "range": "limited"
+  },
+  "deinterlacers": [
+    {
+      "id": "vslow_archival",
+      "label": "Very Slow · Archival (SM3 L2 TR2=1 Sharp0.1 + light denoise)",
+      "qtgmc": { "Preset": "Very Slow", "SourceMatch": 3, "Lossless": 2, "TR2": 1, "Sharpness": 0.1, "NoiseProcess": 1, "NoiseRestore": 0.3 }
+    },
+    {
+      "id": "vslow_safe",
+      "label": "Very Slow · Safe (SM2 L1 TR2=1 Sharp0.1)",
+      "qtgmc": { "Preset": "Very Slow", "SourceMatch": 2, "Lossless": 1, "TR2": 1, "Sharpness": 0.1 }
+    },
+    {
+      "id": "slower_maxdetail",
+      "label": "Slower · Max detail (SM3 L2 TR2=0 Sharp0.0)",
+      "qtgmc": { "Preset": "Slower", "SourceMatch": 3, "Lossless": 2, "TR2": 0, "Sharpness": 0.0 }
+    },
+    {
+      "id": "vslow_lowlight",
+      "label": "Very Slow · Low-light (SM2 L1 TR2=2 + stronger denoise)",
+      "qtgmc": { "Preset": "Very Slow", "SourceMatch": 2, "Lossless": 1, "TR2": 2, "Sharpness": 0.1, "NoiseProcess": 2, "NoiseRestore": 0.3 }
+    },
+    {
+      "id": "slower_default",
+      "label": "Slower · Default",
+      "qtgmc": { "Preset": "Slower" }
+    },
+    {
+      "id": "vslow_default",
+      "label": "Very Slow · Default",
+      "qtgmc": { "Preset": "Very Slow" }
+    },
+    {
+      "id": "placebo_max",
+      "label": "Placebo · Max quality (SM3 L2 TR2=1 Sharp0.1)",
+      "qtgmc": { "Preset": "Placebo", "SourceMatch": 3, "Lossless": 2, "TR2": 1, "Sharpness": 0.1 }
+    },
+    {
+      "id": "slower_detail",
+      "label": "Slower · Detail (SM3 L2 TR2=1 Sharp0.1 + light denoise)",
+      "qtgmc": { "Preset": "Slower", "SourceMatch": 3, "Lossless": 2, "TR2": 1, "Sharpness": 0.1, "NoiseProcess": 1, "NoiseRestore": 0.3 }
+    },
+    {
+      "id": "vslow_grain",
+      "label": "Very Slow · Grain-preserving (SM3 L2 EZKeepGrain)",
+      "qtgmc": { "Preset": "Very Slow", "SourceMatch": 3, "Lossless": 2, "Sharpness": 0.1, "EZKeepGrain": 1.0 }
+    },
+    {
+      "id": "vslow_smooth",
+      "label": "Very Slow · Smooth/stable (SM0 L0 TR2=2)",
+      "qtgmc": { "Preset": "Very Slow", "SourceMatch": 0, "Lossless": 0, "TR2": 2, "Sharpness": 0.1 }
+    },
+    {
+      "id": "jet_qtgmc_default",
+      "label": "JET QTGMC · Default (vs-jetpack)",
+      "jet_qtgmc": {}
+    },
+    {
+      "id": "jet_qtgmc_clean_sharp",
+      "label": "JET QTGMC Clean/sharp (light denoise + Sharp0.1)",
+      "jet_qtgmc": {
+        "denoise": { "mode": "DENOISE", "tr": 1 },
+        "basic": { "noise_restore": 0.15 },
+        "final": { "tr": 1, "noise_restore": 0.15 },
+        "sharpen": { "strength": 0.1 }
+      }
+    },
+    {
+      "id": "jet_qtgmc_refined",
+      "label": "JET QTGMC · Refined source match + lossless",
+      "jet_qtgmc": {
+        "source_match": { "mode": "REFINED" },
+        "lossless": { "mode": "POSTSMOOTH" },
+        "sharpen": { "strength": 0.1 }
+      }
+    },
+    {
+      "id": "jet_qtgmc_archival",
+      "label": "JET QTGMC · Archival denoise/refined",
+      "jet_qtgmc": {
+        "source_match": { "mode": "TWICE_REFINED" },
+        "lossless": { "mode": "POSTSMOOTH" },
+        "denoise": { "mode": "DENOISE", "tr": 1 },
+        "basic": { "noise_restore": 0.3 },
+        "final": { "tr": 1, "noise_restore": 0.3 },
+        "sharpen": { "strength": 0.1 }
+      }
+    },
+    {
+      "id": "ai_ddd",
+      "label": "AI DDD · Disney Deep Deinterlacing (vs_deepdeinterlace)",
+      "supports_video": false,
+      "deepdeinterlace": {
+        "deinterlacer": [1, 1],
+        "tta": [false, false],
+        "mocomp": [false, false],
+        "device": "auto",
+        "fp16": true
+      }
+    },
+    {
+      "id": "ai_def",
+      "label": "AI DeF/DeT · Transformer deinterlacer (vs_deepdeinterlace)",
+      "supports_video": false,
+      "deepdeinterlace": {
+        "deinterlacer": [2, 1],
+        "tta": [false, false],
+        "mocomp": [false, false],
+        "device": "auto",
+        "fp16": true
+      }
+    },
+    {
+      "id": "bwdif",
+      "label": "BWDIF · regular bob",
+      "method": "bwdif"
+    },
+    {
+      "id": "nnedi3_bob",
+      "label": "NNEDI3 · regular bob",
+      "method": "nnedi3_bob"
+    },
+    {
+      "id": "eedi3_bob",
+      "label": "EEDI3 · regular bob",
+      "method": "eedi3_bob"
+    },
+    {
+      "id": "bob_bicubic",
+      "label": "Simple bob · Bicubic resize",
+      "method": "bob_bicubic"
+    },
+    {
+      "id": "bob_lanczos",
+      "label": "Simple bob · Lanczos resize",
+      "method": "bob_lanczos"
+    },
+    {
+      "id": "bob_sinc",
+      "label": "Simple bob · Sinc resize",
+      "method": "bob_sinc"
+    },
+    {
+      "id": "bob_bilinear",
+      "label": "Simple bob · Bilinear resize",
+      "method": "bob_bilinear"
+    }
+  ]
+}

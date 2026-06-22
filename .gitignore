@@ -1,0 +1,48 @@
+# Local agent/app state
+.agents/
+
+# Private source footage and generated archive data
+raw_recordings/
+data/
+TEMP/
+final_mp4_access_copies/
+
+# Local tool binaries; link to public downloads in the README instead
+*.exe
+*.msi
+*.zip
+*.7z
+*.rar
+
+# Video/audio media: keep real footage and rendered outputs out of git
+*.avi
+*.dv
+*.mov
+*.mp4
+*.m4v
+*.mkv
+*.wav
+*.aac
+*.flac
+
+# DVRescue / stitching / conversion generated folders
+**/KEEP/
+**/_dvrescue_best_work_tmp/
+**/_metadata_validation/
+**/stitch_work/
+stitch_candidate_review/
+stitch_broad_visual_review/
+
+# Python/cache/log noise
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.bak
+*.stdout.txt
+*.stderr.txt
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini

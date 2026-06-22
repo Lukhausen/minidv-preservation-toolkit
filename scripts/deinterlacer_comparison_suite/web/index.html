@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deinterlacer comparison</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header>
+  <h1>Deinterlacer shootout</h1>
+  <div id="status">
+    <span id="progress">0 votes</span>
+    <div class="mode-switch" role="group" aria-label="Compare mode">
+      <button id="mode-image" class="mode-option active" data-mode="image" type="button" aria-pressed="true">Photo</button>
+      <button id="mode-video" class="mode-option" data-mode="video" type="button" aria-pressed="false">Video 1s</button>
+    </div>
+    <button id="speed-toggle" type="button" title="Toggle half-speed video playback (S)" aria-pressed="false">1x</button>
+    <div class="mode-switch" role="group" aria-label="Pairing mode">
+      <button id="pairing-adaptive" class="pairing-option active" data-pairing="adaptive" type="button" aria-pressed="true" title="Adaptive close-Elo pairing">Adaptive</button>
+      <button id="pairing-random" class="pairing-option" data-pairing="random" type="button" aria-pressed="false" title="True random method pairing">Random</button>
+    </div>
+    <button id="zoom-toggle" type="button" title="Toggle 200% zoom (Z)">Zoom 100%</button>
+    <button id="reveal-toggle" type="button" title="Reveal A/B algorithm names (I)" aria-pressed="false">Reveal A/B</button>
+    <button id="undo" type="button" title="Undo last vote (U)">Undo</button>
+    <button id="top3-btn" type="button" title="Pairwise compare the focused QTGMC/JET set">Focused pairs</button>
+    <button id="compression-btn" type="button" title="Blind compare MP4 compression settings">Compression</button>
+    <button id="samples-btn" type="button" title="Watch prepared final MP4 samples beside the original">Final samples</button>
+    <button id="results-btn" type="button" title="Show ranking (R)">Ranking</button>
+    <button id="reset" type="button" title="Reset all ratings">Reset</button>
+  </div>
+</header>
+
+<main id="compare">
+  <div class="meta">
+    <div id="identity-note" class="identity-note" hidden></div>
+    <span id="video-label">…</span>
+    <span id="loading-note" hidden>· rendering frames…</span>
+  </div>
+
+  <div class="pair stacked">
+    <figure class="side single" id="viewer" data-side="left">
+      <button class="image-wrap stack-wrap" id="image-toggle" type="button" disabled title="Toggle A/B (click or Space)">
+        <img id="img-left" class="stack-img active" alt="A" hidden>
+        <img id="img-right" class="stack-img" alt="B" hidden>
+        <img id="img-original" class="stack-img" alt="Original interlaced frame" hidden>
+        <video id="clip-left" class="stack-video" muted playsinline loop preload="auto" hidden></video>
+        <video id="clip-right" class="stack-video" muted playsinline loop preload="auto" hidden></video>
+        <div class="spinner" id="spin-current"><div class="dots"></div><span>rendering A…</span></div>
+      </button>
+      <figcaption>
+        <span class="key" id="current-key">A</span>
+        <button class="pick" id="pick-current" data-pick="left" type="button" disabled>Choose A as better</button>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="controls">
+    <button id="tie" type="button" disabled title="Can't tell (T)">Tie / can't tell</button>
+    <p class="hint">
+      Photo: click/<kbd>Space</kbd> toggle A/B. Video: click/<kbd>Space</kbd> switches A/B while the 1s clips loop.
+      <kbd>I</kbd> reveal A/B. <kbd>P</kbd> adaptive/random pairs.
+      <kbd>Enter</kbd> choose current · hold <kbd>O</kbd> original ·
+      <kbd>&larr;</kbd>/<kbd>A</kbd> show A · <kbd>&rarr;</kbd>/<kbd>D</kbd> show B ·
+      <kbd>T</kbd> tie · <kbd>U</kbd> undo · <kbd>V</kbd> image/video · <kbd>Z</kbd> zoom · <kbd>R</kbd> ranking
+    </p>
+    <p class="hint"><kbd>S</kbd> toggles 0.5x video playback.</p>
+    <p class="hint" id="mini-leader"></p>
+  </div>
+
+  <section id="preview-lab" class="preview-lab">
+    <div class="preview-head">
+      <h2>Single-file preview</h2>
+      <div class="preview-controls">
+        <label for="preview-mode">A</label>
+        <select id="preview-mode"></select>
+        <label for="preview-mode-b">B</label>
+        <select id="preview-mode-b"></select>
+        <label for="preview-frame">Start frame</label>
+        <input id="preview-frame" type="number" min="0" step="1" value="0">
+      </div>
+    </div>
+    <label id="preview-drop" class="preview-drop" for="preview-file">
+      <input id="preview-file" type="file" accept="video/*,.avi,.dv,.mov,.mkv,.mp4,.m2t,.mts,.mpg,.mpeg,.vob" hidden>
+      <span id="preview-drop-title">Drop a video here, or click to choose one</span>
+      <small>The full source is rendered from the chosen start frame. The input file is only read and copied into a preview cache.</small>
+    </label>
+    <div id="preview-status" class="preview-status">Choose two deinterlacers, then drop a file to render the full video preview.</div>
+    <div id="preview-players" class="preview-players" hidden>
+      <figure class="preview-card">
+        <figcaption>Original interlaced source</figcaption>
+        <video id="preview-original-video" class="preview-video" controls loop muted playsinline preload="auto"></video>
+      </figure>
+      <figure class="preview-card">
+        <figcaption id="preview-rendered-label">Deinterlacer A</figcaption>
+        <video id="preview-video" class="preview-video" controls loop muted playsinline preload="auto"></video>
+      </figure>
+      <figure class="preview-card" id="preview-b-card">
+        <figcaption id="preview-rendered-b-label">Deinterlacer B</figcaption>
+        <video id="preview-b-video" class="preview-video" controls loop muted playsinline preload="auto"></video>
+      </figure>
+    </div>
+  </section>
+</main>
+
+<section id="top3" hidden>
+  <div class="results-head">
+    <h2>Focused pairwise loop <span id="top3-votes"></span></h2>
+    <button id="top3-back" type="button">&larr; Back</button>
+  </div>
+
+  <div class="meta">
+    <span id="top3-video-label">loading focused pair...</span>
+    <span id="top3-loading-note" hidden> - rendering focused pair clips...</span>
+  </div>
+  <div id="top3-identity-note" class="identity-note" hidden></div>
+
+  <figure class="side single top3-card">
+    <button class="image-wrap stack-wrap top3-wrap" id="top3-viewer" type="button" disabled title="Click or Space to toggle A/B">
+      <video id="top3-clip-0" class="top3-video active" muted playsinline loop preload="auto"></video>
+      <video id="top3-clip-1" class="top3-video" muted playsinline loop preload="auto"></video>
+      <div class="spinner" id="top3-spinner"><div class="dots"></div><span>rendering focused pair clips...</span></div>
+    </button>
+    <figcaption>
+      <span class="key" id="top3-current-key">A</span>
+      <button class="pick" id="top3-pick" type="button" disabled>Choose A as best</button>
+      <button id="top3-skip" type="button" disabled title="Skip this focused comparison (T)">IDK / skip</button>
+    </figcaption>
+  </figure>
+
+  <div class="controls">
+    <p class="hint">
+      Click/<kbd>Space</kbd> toggles A/B while both clips keep looping.
+      <kbd>I</kbd> reveals A/B. <kbd>Enter</kbd> chooses the current clip as best. <kbd>T</kbd> skips.
+    </p>
+  </div>
+</section>
+
+<section id="compression" hidden>
+  <div class="results-head">
+    <h2>Compression blind test <span id="compression-votes"></span></h2>
+    <button id="compression-back" type="button">&larr; Back</button>
+  </div>
+
+  <div class="meta">
+    <span id="compression-video-label">loading compression pair...</span>
+    <span id="compression-loading-note" hidden> - rendering MP4 pair clips...</span>
+  </div>
+  <div id="compression-identity-note" class="identity-note" hidden></div>
+
+  <figure class="side single top3-card">
+    <button class="image-wrap stack-wrap top3-wrap" id="compression-viewer" type="button" disabled title="Click or Space to toggle A/B">
+      <video id="compression-clip-0" class="top3-video active" muted playsinline loop preload="auto"></video>
+      <video id="compression-clip-1" class="top3-video" muted playsinline loop preload="auto"></video>
+      <div class="spinner" id="compression-spinner"><div class="dots"></div><span>rendering MP4 pair clips...</span></div>
+    </button>
+    <figcaption>
+      <span class="key" id="compression-current-key">A</span>
+      <button class="pick" id="compression-pick" type="button" disabled>Choose A as best</button>
+      <button id="compression-skip" type="button" disabled title="Skip this compression comparison (T)">IDK / skip</button>
+    </figcaption>
+  </figure>
+
+  <div class="controls">
+    <p class="hint">
+      Base is Slower deinterlace, then MP4 x264 variants. Mostly dark examples, with a few light ones.
+      Click/<kbd>Space</kbd> toggles A/B. <kbd>I</kbd> reveals settings.
+      <kbd>Enter</kbd> chooses current. <kbd>T</kbd> skips.
+    </p>
+  </div>
+</section>
+
+<section id="results" hidden>
+  <div class="results-head">
+    <h2>Live ranking <span id="results-votes"></span></h2>
+    <button id="back" type="button">&larr; Keep voting</button>
+  </div>
+  <div id="results-body"></div>
+</section>
+
+<script src="/web/app.js"></script>
+</body>
+</html>

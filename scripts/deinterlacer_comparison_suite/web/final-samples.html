@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Final MP4 samples</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header>
+  <h1>Final MP4 samples</h1>
+  <div id="status">
+    <button id="back-main" type="button">Back to comparison</button>
+    <button id="prev-sample" type="button">Previous</button>
+    <button id="next-sample" type="button">Next</button>
+    <button id="play-toggle" type="button">Play</button>
+    <button id="sample-speed" type="button" aria-pressed="false">1x</button>
+  </div>
+</header>
+
+<main class="sample-page">
+  <div class="meta">
+    <div id="sample-title">Loading samples...</div>
+    <div id="sample-meta" class="hint"></div>
+  </div>
+
+  <div id="sample-list" class="sample-list"></div>
+
+  <div class="preview-players sample-players">
+    <figure class="preview-card">
+      <figcaption>Original interlaced reference</figcaption>
+      <video id="sample-original" class="preview-video" controls loop muted playsinline preload="auto"></video>
+      <div id="sample-original-size" class="sample-size"></div>
+    </figure>
+    <figure class="preview-card">
+      <figcaption>Final MP4: Slower deinterlace + x264 veryslow CRF17 grain</figcaption>
+      <video id="sample-final" class="preview-video" controls loop muted playsinline preload="auto"></video>
+      <div id="sample-final-size" class="sample-size"></div>
+    </figure>
+  </div>
+
+  <p class="hint">
+    The left video is the source rendered as an undeinterlaced reference. The right video is the final encoded MP4.
+    Play, pause, seek, and speed changes are synced.
+  </p>
+</main>
+
+<script src="/web/final-samples.js"></script>
+</body>
+</html>
