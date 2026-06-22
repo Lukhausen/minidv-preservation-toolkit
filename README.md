@@ -49,10 +49,14 @@ and it did not mark those gaps as errors in the `.dv` data. That is really bad,
 because DV normally carries error information that tools can use to detect or
 repair damage.
 
-DVRescue can be very useful, but one important thing: it uses file A as the
-reference and file B as the fixed file. So if A has the start and middle, and B
-has the middle and end, DVRescue cannot just elongate that into one longer file.
-That is why I also built stitching tools.
+DVRescue can be very useful, but it is easy to misunderstand what its A/B repair
+mode does. File A is the reference timeline. File B is only a donor that can fill
+or replace damaged frames inside A's timeline. DVRescue does not create the union
+of both captures and it will not make A longer. If A is 10 minutes long and B
+captured the same material plus 50 extra seconds at the end, the DVRescue output
+is still 10 minutes long. Those extra 50 seconds from B are dropped. If your two
+captures overlap but one contains extra beginning or ending material, you need
+stitching, not just DVRescue repair. That is why I also built stitching tools.
 
 ## Deinterlacing
 

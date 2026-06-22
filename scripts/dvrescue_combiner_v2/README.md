@@ -11,6 +11,15 @@ Important: use `--v2`. The older mode still runs, but V2 is the improved
 variant and the only one I would recommend now. It clusters by better DV timing
 evidence, handles timecode more carefully, and stitches much more reliably.
 
+The key DVRescue limitation this script works around: DVRescue repair is not a
+general "combine both captures into the longest possible file" operation. File A
+defines the output timeline and length. File B can donate better frames only
+where it overlaps A. If B contains 50 seconds more footage after A has already
+ended, those 50 seconds will not appear in the DVRescue result. V2 therefore
+builds the raw DV master timeline first, using timecode-based stitching where
+needed, and only then lets DVRescue improve that already-built master if the
+result does not shrink coverage or add new problems.
+
 ## What It Does
 
 - analyzes one cassette folder with ffprobe and DVRescue
