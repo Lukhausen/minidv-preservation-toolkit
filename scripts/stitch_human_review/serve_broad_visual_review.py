@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import concurrent.futures as futures
 import datetime as dt
+import importlib
 import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -22,12 +25,14 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "raw_recordings"
 OUT = ROOT / "data" / "stitch_human_review"
 SCAN = OUT / "full_adjacent_pair_scan.json"
+SCAN_ERRORS = OUT / "scan_errors.json"
 CLIPS = OUT / "clips"
 CASES_PATH = OUT / "cases.json"
 SUMMARY_PATH = OUT / "summary.json"
 RESULTS_JSON = OUT / "results.json"
 RESULTS_TXT = OUT / "results.txt"
 STATS_JSON = OUT / "review_stats.json"
+STATS_LOCK = threading.RLock()
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 CLIP_SECONDS = 5.0
@@ -47,6 +52,30 @@ NAME_RE = re.compile(
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def check_dependencies() -> None:
+    problems = []
+    for module in ("numpy", "cv2"):
+        try:
+            importlib.import_module(module)
+        except (ImportError, OSError) as exc:
+            problems.append(f"Cannot load {module}: {exc}")
+    if problems:
+        install = ("& " if os.name == "nt" else "") + subprocess.list2cmdline([
+            sys.executable, "-m", "pip", "install", "-r",
+            str(Path(__file__).with_name("requirements.txt")),
+        ])
+        problems.append(f"Install the review dependencies with:\n  {install}")
+    missing_tools = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+    if missing_tools:
+        problems.append(f"Add these FFmpeg tools to PATH: {', '.join(missing_tools)}")
+    if problems:
+        raise RuntimeError("\n".join(problems))
+
+
+def read_scan_errors() -> list[dict[str, Any]]:
+    return json.loads(SCAN_ERRORS.read_text(encoding="utf-8")) if SCAN_ERRORS.exists() else []
 
 
 def ffprobe_duration(path: Path) -> float:
@@ -266,7 +295,9 @@ def all_adjacent_pairs() -> list[tuple[Path, Path, str]]:
 def build_scan(force: bool = False, workers: int = 6) -> list[dict[str, Any]]:
     OUT.mkdir(parents=True, exist_ok=True)
     if SCAN.exists() and not force:
-        return json.loads(SCAN.read_text(encoding="utf-8"))
+        cached = json.loads(SCAN.read_text(encoding="utf-8"))
+        if cached:
+            return cached
 
     pairs = all_adjacent_pairs()
     rows: list[dict[str, Any]] = []
@@ -287,8 +318,15 @@ def build_scan(force: bool = False, workers: int = 6) -> list[dict[str, Any]]:
                 print(f"  {index}/{len(pairs)} pairs scanned; rows={len(rows)} errors={len(errors)}", flush=True)
 
     rows.sort(key=lambda row: (row["cassette"].casefold(), row["a"].casefold(), row["b"].casefold()))
+    SCAN_ERRORS.write_text(json.dumps(errors, indent=2), encoding="utf-8")
+    if errors and not rows:
+        raise RuntimeError(
+            f"All {len(errors)} adjacent-pair comparisons failed. First error: {errors[0]['error']}\n"
+            f"Details: {SCAN_ERRORS}\nFix the error and restart the review tool."
+        )
     SCAN.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    (OUT / "scan_errors.json").write_text(json.dumps(errors, indent=2), encoding="utf-8")
+    if errors:
+        print(f"Warning: {len(errors)} pairs could not be scanned. Details: {SCAN_ERRORS}", flush=True)
     return rows
 
 
@@ -421,7 +459,7 @@ def clip_seconds_for(row: dict[str, Any]) -> float:
 def build_cases(force: bool = False, force_scan: bool = False, scan_workers: int = 6) -> list[dict[str, Any]]:
     OUT.mkdir(parents=True, exist_ok=True)
     CLIPS.mkdir(parents=True, exist_ok=True)
-    if CASES_PATH.exists() and not force:
+    if CASES_PATH.exists() and not force and not force_scan:
         existing = json.loads(CASES_PATH.read_text(encoding="utf-8"))
         if existing and all(case.get("buildVersion") == BUILD_VERSION and "clipSeconds" in case for case in existing):
             return existing
@@ -479,10 +517,29 @@ def build_cases(force: bool = False, force_scan: bool = False, scan_workers: int
         )
 
     CASES_PATH.write_text(json.dumps(cases, indent=2), encoding="utf-8")
+    empty_reason = ""
+    if not cases:
+        if skipped_missing:
+            empty_reason = (
+                "The cached scan refers to source files that no longer exist. "
+                "Restart with --force-scan to scan the current recordings."
+            )
+        elif not rows:
+            empty_reason = (
+                "No adjacent AVI pairs found. Place at least two .avi files directly in "
+                "raw_recordings/<tape>/, then restart the tool."
+            )
+        else:
+            empty_reason = (
+                f"Scanned {len(rows)} adjacent AVI pairs; none matched the stitch-candidate criteria. "
+                "This page reviews possible joins between recordings, not every recording or quality-control error."
+            )
     summary = {
         "source_safety": f"Source AVIs are read-only. This tool writes only review metadata, labels, and access clips under {OUT}.",
         "build_version": BUILD_VERSION,
         "scan_pairs": len(rows),
+        "scan_error_count": len(read_scan_errors()),
+        "empty_reason": empty_reason,
         "already_labeled_pairs_excluded": len(reviewed),
         "selected_count": len(cases),
         "skipped_missing_source_paths": skipped_missing,
@@ -524,38 +581,40 @@ def write_results(results: dict[str, str]) -> None:
 
 
 def read_stats() -> dict[str, Any]:
-    default = {"activeMs": 0, "updatedAt": None, "reviewedCount": 0}
-    if not STATS_JSON.exists():
-        return default
-    try:
-        raw = json.loads(STATS_JSON.read_text(encoding="utf-8"))
-    except Exception:
-        return default
-    if not isinstance(raw, dict):
-        return default
-    active_ms = raw.get("activeMs", 0)
-    reviewed_count = raw.get("reviewedCount", 0)
-    return {
-        "activeMs": max(0, int(active_ms)) if isinstance(active_ms, (int, float)) else 0,
-        "updatedAt": raw.get("updatedAt"),
-        "reviewedCount": max(0, int(reviewed_count)) if isinstance(reviewed_count, (int, float)) else 0,
-    }
+    with STATS_LOCK:
+        default = {"activeMs": 0, "updatedAt": None, "reviewedCount": 0}
+        if not STATS_JSON.exists():
+            return default
+        try:
+            raw = json.loads(STATS_JSON.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+        if not isinstance(raw, dict):
+            return default
+        active_ms = raw.get("activeMs", 0)
+        reviewed_count = raw.get("reviewedCount", 0)
+        return {
+            "activeMs": max(0, int(active_ms)) if isinstance(active_ms, (int, float)) else 0,
+            "updatedAt": raw.get("updatedAt"),
+            "reviewedCount": max(0, int(reviewed_count)) if isinstance(reviewed_count, (int, float)) else 0,
+        }
 
 
 def write_stats(stats: dict[str, Any]) -> dict[str, Any]:
-    current = read_stats()
-    active_ms = stats.get("activeMs", current["activeMs"])
-    reviewed_count = stats.get("reviewedCount", current["reviewedCount"])
-    saved = {
-        "activeMs": max(0, int(active_ms)) if isinstance(active_ms, (int, float)) else current["activeMs"],
-        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "reviewedCount": max(0, int(reviewed_count)) if isinstance(reviewed_count, (int, float)) else current["reviewedCount"],
-    }
-    OUT.mkdir(parents=True, exist_ok=True)
-    tmp = STATS_JSON.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(saved, indent=2), encoding="utf-8")
-    os.replace(tmp, STATS_JSON)
-    return saved
+    with STATS_LOCK:
+        current = read_stats()
+        active_ms = stats.get("activeMs", current["activeMs"])
+        reviewed_count = stats.get("reviewedCount", current["reviewedCount"])
+        saved = {
+            "activeMs": max(0, int(active_ms)) if isinstance(active_ms, (int, float)) else current["activeMs"],
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "reviewedCount": max(0, int(reviewed_count)) if isinstance(reviewed_count, (int, float)) else current["reviewedCount"],
+        }
+        OUT.mkdir(parents=True, exist_ok=True)
+        tmp = STATS_JSON.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+        os.replace(tmp, STATS_JSON)
+        return saved
 
 
 def clip_path(case: dict[str, Any], side: str) -> Path:
@@ -665,6 +724,7 @@ def render_index() -> str:
       font-family: Arial, Helvetica, sans-serif;
       line-height: 1.35;
     }
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       background: #f6f6f4;
@@ -698,6 +758,18 @@ def render_index() -> str:
       border-radius: 8px;
       overflow: hidden;
     }
+    .empty-state { padding: 24px; }
+    .empty-state h2 { margin: 0 0 8px; font-size: 20px; }
+    .empty-state p, .notice p { margin: 0; }
+    .notice {
+      margin: 12px;
+      padding: 12px;
+      border-left: 3px solid #9a7126;
+    }
+    .notice.error { border-color: #b92f2f; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; overflow: auto; }
     .meta {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -850,39 +922,56 @@ def render_index() -> str:
 <body>
   <header>
     <h1>Broad Visual Stitch Review</h1>
-    <p class="sub">Regular candidates play 1 second from A and 1 second from B; black/low-texture fade candidates play 5 seconds each. Keys: Enter = good stitch, Delete/Entf/Backspace = wrong stitch, A = unsure, Space = replay current pair, P = pause/resume timer and playback. Every label is saved immediately.</p>
+    <p class="sub" id="reviewHelp" hidden>Regular candidates play 1 second from A and 1 second from B; black/low-texture fade candidates play 5 seconds each. Keys: Enter = good stitch, Delete/Entf/Backspace = wrong stitch, A = unsure, Space = replay current pair, P = pause/resume timer and playback. Every label is saved immediately.</p>
   </header>
   <main>
     <section class="review">
-      <div class="meta">
-        <div>
-          <div id="badges"></div>
-          <div class="files" id="files"></div>
-        </div>
-        <div>
-          <span class="pill" id="decisionPill">unreviewed</span>
-        </div>
+      <div class="empty-state" id="emptyState" role="status">
+        <h2 id="emptyTitle">Loading review...</h2>
+        <p id="emptyDescription">Checking for clips to review.</p>
+        <details hidden><summary>Technical details</summary><pre></pre></details>
       </div>
-      <div class="player">
-        <div class="feedback" id="feedback"></div>
-        <video id="video" controls preload="metadata"></video>
-        <div class="phase" id="phase"></div>
-        <div class="timer">
-          <div><span>Progress</span><strong id="progress">0 / 0</strong></div>
-          <div><span>Active time</span><strong id="activeTime">00:00</strong></div>
-          <div><span>Speed</span><strong id="speed">-</strong></div>
-          <div><span>Estimated left</span><strong id="eta">-</strong></div>
+      <aside class="notice" id="scanNotice" role="status" hidden>
+        <p></p>
+        <details><summary>Show scan details and next steps</summary><pre></pre></details>
+      </aside>
+      <aside class="notice error" id="playbackNotice" role="alert" hidden>
+        <p></p>
+        <details><summary>Technical details</summary><pre></pre></details>
+      </aside>
+      <aside class="notice error" id="decisionNotice" role="alert" hidden><p></p></aside>
+      <aside class="notice error" id="statsNotice" role="alert" hidden><p></p></aside>
+      <div id="reviewContent" hidden>
+        <div class="meta">
+          <div>
+            <div id="badges"></div>
+            <div class="files" id="files"></div>
+          </div>
+          <div>
+            <span class="pill" id="decisionPill">unreviewed</span>
+          </div>
         </div>
-        <div class="controls">
-          <button class="primary" onclick="mark('works')">Enter Good Stitch</button>
-          <button class="danger" onclick="mark('bad')">Delete/Entf Wrong Stitch</button>
-          <button class="warn" onclick="mark('unsure')">A Unsure</button>
-          <button onclick="replay(true)">Space Replay</button>
-          <button onclick="togglePause()">P Pause/Resume</button>
-          <button onclick="go(-1)">Previous</button>
-          <button onclick="go(1)">Next</button>
+        <div class="player">
+          <div class="feedback" id="feedback"></div>
+          <video id="video" controls preload="metadata"></video>
+          <div class="phase" id="phase"></div>
+          <div class="timer">
+            <div><span>Progress</span><strong id="progress">0 / 0</strong></div>
+            <div><span>Active time</span><strong id="activeTime">00:00</strong></div>
+            <div><span>Speed</span><strong id="speed">-</strong></div>
+            <div><span>Estimated left</span><strong id="eta">-</strong></div>
+          </div>
+          <div class="controls">
+            <button class="primary" onclick="mark('works')">Enter Good Stitch</button>
+            <button class="danger" onclick="mark('bad')">Delete/Entf Wrong Stitch</button>
+            <button class="warn" onclick="mark('unsure')">A Unsure</button>
+            <button onclick="replay(true)">Space Replay</button>
+            <button onclick="togglePause()">P Pause/Resume</button>
+            <button onclick="go(-1)">Previous</button>
+            <button onclick="go(1)">Next</button>
+          </div>
+          <div class="status" id="status" role="status" aria-live="polite"></div>
         </div>
-        <div class="status" id="status"></div>
       </div>
     </section>
   </main>
@@ -938,15 +1027,50 @@ def render_index() -> str:
       return decisions[id] || 'unreviewed';
     }
 
+    function showNotice(id, message, details = '') {
+      const node = document.getElementById(id);
+      node.hidden = !message;
+      node.querySelector('p').textContent = message;
+      const disclosure = node.querySelector('details');
+      if (disclosure) {
+        disclosure.hidden = !details;
+        disclosure.querySelector('pre').textContent = details;
+      }
+    }
+
+    function showEmpty(title, description, details = '') {
+      document.getElementById('reviewContent').hidden = true;
+      document.getElementById('reviewHelp').hidden = true;
+      document.getElementById('emptyTitle').textContent = title;
+      showNotice('emptyState', description, details);
+    }
+
     async function loadState() {
       const response = await fetch('/api/state');
+      if (!response.ok) throw new Error(`Server returned HTTP ${response.status}`);
       const data = await response.json();
+      if (!Array.isArray(data.cases)) throw new Error('Server returned invalid review cases');
       cases = data.cases;
       decisions = data.decisions || {};
       activeMs = Math.max(0, Number(data.stats?.activeMs || 0));
       sessionStartDecisions = reviewedCount();
       const firstOpen = cases.findIndex(c => !['works','bad','unsure'].includes(decisionFor(c.id)));
       index = firstOpen >= 0 ? firstOpen : 0;
+      const summary = data.summary || {};
+      const errorCount = summary.scan_error_count;
+      if (errorCount) {
+        const details = (data.scanErrors || []).map(error =>
+          `${error.cassette}: ${error.a} → ${error.b}\\n${error.error}`).join('\\n\\n');
+        showNotice('scanNotice',
+          `${errorCount} recording pair${errorCount === 1 ? '' : 's'} could not be checked. ` +
+          (cases.length ? 'You can review the available clips.' : 'The scan is incomplete.'),
+          details + '\\n\\nAfter fixing the affected recordings, restart the tool with --force-scan to retry.');
+      }
+      if (!cases.length) {
+        showEmpty('No clips to review', summary.empty_reason ||
+          'No stitch candidates are available. Check your recordings and restart the tool.');
+        return;
+      }
       renderCase();
       updateTimer();
       setInterval(updateTimer, 500);
@@ -970,13 +1094,15 @@ def render_index() -> str:
         reviewedCount: reviewedCount()
       };
       try {
-        await fetch('/api/stats', {
+        const response = await fetch('/api/stats', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)
         });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        showNotice('statsNotice', '');
       } catch (error) {
-        document.getElementById('status').textContent = 'Stats save failed; labels still save separately.';
+        showNotice('statsNotice', 'Review time could not be saved. It will retry automatically while the timer is running; your stitch choices save separately.');
       }
     }
 
@@ -998,8 +1124,11 @@ def render_index() -> str:
     }
 
     function renderCase() {
-      if (!cases.length) return;
       const c = current();
+      if (!c) return;
+      document.getElementById('emptyState').hidden = true;
+      document.getElementById('reviewContent').hidden = false;
+      document.getElementById('reviewHelp').hidden = false;
       const d = decisionFor(c.id);
       document.getElementById('badges').innerHTML =
         `<span class="pill">${c.id}</span><span class="pill">${index + 1} / ${cases.length}</span><span class="pill">${c.clipSeconds}s clips</span><span class="pill">${c.cassette}</span><span class="pill">${c.category}</span><span class="pill">${c.why}</span>`;
@@ -1066,15 +1195,22 @@ def render_index() -> str:
 
     async function mark(value) {
       const c = current();
+      try {
+        const response = await fetch('/api/decision', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({id: c.id, decision: value})
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        showNotice('decisionNotice', 'Your choice could not be saved. Check that the review server is running, then choose again.');
+        return;
+      }
+      showNotice('decisionNotice', '');
       const old = decisionFor(c.id);
       decisions[c.id] = value;
       if (!['works','bad','unsure'].includes(old)) sessionDecisionCount += 1;
       flash(value);
-      await fetch('/api/decision', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({id: c.id, decision: value})
-      });
       await saveStats(true);
       document.getElementById('status').textContent = `Saved ${c.id}: ${value}`;
       goToNextUnreviewed();
@@ -1116,7 +1252,8 @@ def render_index() -> str:
     }
 
     document.addEventListener('keydown', (event) => {
-      if (event.repeat) return;
+      if (event.repeat || !current()) return;
+      if (event.target.closest?.('button, summary, a, input, textarea, select')) return;
       if (event.key === 'Enter') {
         event.preventDefault();
         startTimerIfNeeded();
@@ -1148,11 +1285,30 @@ def render_index() -> str:
     });
 
     window.addEventListener('beforeunload', () => {
+      if (!cases.length) return;
       const payload = JSON.stringify({activeMs: effectiveActiveMs(), reviewedCount: reviewedCount()});
       navigator.sendBeacon('/api/stats', new Blob([payload], {type: 'application/json'}));
     });
 
-    loadState();
+    video.addEventListener('loadeddata', () => showNotice('playbackNotice', ''));
+    video.addEventListener('error', async () => {
+      const source = video.currentSrc || video.src;
+      if (!source) return;
+      let message = 'The review clip could not be played.';
+      try {
+        const response = await fetch(source);
+        if (!response.ok) message = (await response.json()).error || `HTTP ${response.status}`;
+      } catch (error) {
+        message += ` ${error.message}`;
+      }
+      if (source === (video.currentSrc || video.src)) {
+        showNotice('playbackNotice', 'This clip could not be played. Try Replay or move to another pair.', message);
+      }
+    });
+
+    loadState().catch(error => {
+      showEmpty('Could not load review', 'Check that the review server is running, then reload this page.', error.message);
+    });
   </script>
 </body>
 </html>
@@ -1201,7 +1357,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self.send_bytes(render_index().encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/api/state":
-            self.send_json({"cases": self.cases, "decisions": read_results(), "stats": read_stats()})
+            summary = json.loads(SUMMARY_PATH.read_text(encoding="utf-8")) if SUMMARY_PATH.exists() else {}
+            errors = read_scan_errors()
+            summary["scan_error_count"] = len(errors)
+            self.send_json({"cases": self.cases, "decisions": read_results(), "stats": read_stats(),
+                            "summary": summary, "scanErrors": errors})
             return
         if path == "/api/warm":
             query = urllib.parse.parse_qs(parsed.query)
@@ -1293,11 +1453,15 @@ def main() -> int:
     parser.add_argument("--force-scan", action="store_true")
     parser.add_argument("--scan-workers", type=int, default=6)
     args = parser.parse_args()
-    cases = build_cases(force=args.force_build, force_scan=args.force_scan, scan_workers=args.scan_workers)
-    if args.build_only:
-        print(json.dumps(json.loads(SUMMARY_PATH.read_text(encoding="utf-8")), indent=2))
-        return 0
-    serve(args.port, force_build=False, force_scan=False, scan_workers=args.scan_workers)
+    try:
+        check_dependencies()
+        if args.build_only:
+            build_cases(force=args.force_build, force_scan=args.force_scan, scan_workers=args.scan_workers)
+            print(json.dumps(json.loads(SUMMARY_PATH.read_text(encoding="utf-8")), indent=2))
+        else:
+            serve(args.port, force_build=args.force_build, force_scan=args.force_scan, scan_workers=args.scan_workers)
+    except (OSError, RuntimeError) as exc:
+        parser.exit(1, f"Error: {exc}\n")
     return 0
 
 
